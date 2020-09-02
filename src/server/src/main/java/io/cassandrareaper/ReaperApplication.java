@@ -312,6 +312,9 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
       while (true) {
         try {
           context.storage = initializeStorage(config, environment);
+          if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
+            System.exit(0);
+          }
           break;
         } catch (RuntimeException e) {
           LOG.error("Storage is not ready yet, trying again to connect shortly...", e);
