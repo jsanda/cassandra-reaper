@@ -227,7 +227,9 @@ public final class CassandraStorage implements IStorage, IDistributedStorage {
         .get();
 
     initializeAndUpgradeSchema(cassandra, session, config, version);
-    prepareStatements();
+    if (!Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
+      prepareStatements();
+    }
   }
 
   private static void initializeAndUpgradeSchema(

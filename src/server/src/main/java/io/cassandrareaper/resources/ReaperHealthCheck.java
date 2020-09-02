@@ -41,6 +41,9 @@ public final class ReaperHealthCheck extends com.codahale.metrics.health.HealthC
   @Override
   protected Result check() throws ReaperException {
     if (context.storage.isStorageConnected()) {
+      if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
+        return Result.healthy();
+      }
       if (System.currentTimeMillis() > nextCheck) {
         nextCheck = System.currentTimeMillis() + HEALTH_CHECK_INTERVAL;
         try {

@@ -171,6 +171,10 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
 
     tryInitializeStorage(config, environment);
 
+    if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
+      return;
+    }
+
     if (context.jmxConnectionFactory == null) {
       LOG.info("no JMX connection factory given in context, creating default");
       context.jmxConnectionFactory = new JmxConnectionFactory(context);
