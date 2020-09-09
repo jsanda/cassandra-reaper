@@ -17,44 +17,6 @@
 
 package io.cassandrareaper;
 
-import io.cassandrareaper.ReaperApplicationConfiguration.DatacenterAvailability;
-import io.cassandrareaper.ReaperApplicationConfiguration.JmxCredentials;
-import io.cassandrareaper.core.Cluster;
-import io.cassandrareaper.core.Node;
-import io.cassandrareaper.jmx.ClusterFacade;
-import io.cassandrareaper.jmx.JmxConnectionFactory;
-import io.cassandrareaper.jmx.JmxConnectionsInitializer;
-import io.cassandrareaper.resources.ClusterResource;
-import io.cassandrareaper.resources.DiagEventSseResource;
-import io.cassandrareaper.resources.DiagEventSubscriptionResource;
-import io.cassandrareaper.resources.NodeStatsResource;
-import io.cassandrareaper.resources.PingResource;
-import io.cassandrareaper.resources.ReaperHealthCheck;
-import io.cassandrareaper.resources.RepairRunResource;
-import io.cassandrareaper.resources.RepairScheduleResource;
-import io.cassandrareaper.resources.SnapshotResource;
-import io.cassandrareaper.resources.auth.LoginResource;
-import io.cassandrareaper.resources.auth.ShiroExceptionMapper;
-import io.cassandrareaper.resources.auth.ShiroJwtProvider;
-import io.cassandrareaper.service.AutoSchedulingManager;
-import io.cassandrareaper.service.PurgeService;
-import io.cassandrareaper.service.RepairManager;
-import io.cassandrareaper.service.SchedulingManager;
-import io.cassandrareaper.storage.CassandraStorage;
-import io.cassandrareaper.storage.IDistributedStorage;
-import io.cassandrareaper.storage.IStorage;
-import io.cassandrareaper.storage.MemoryStorage;
-import io.cassandrareaper.storage.PostgresStorage;
-
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-
-import javax.servlet.DispatcherType;
-import javax.servlet.FilterRegistration;
-
 import com.codahale.metrics.InstrumentedScheduledExecutorService;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
@@ -62,6 +24,22 @@ import com.datastax.driver.core.policies.EC2MultiRegionAddressTranslator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import io.cassandrareaper.ReaperApplicationConfiguration.DatacenterAvailability;
+import io.cassandrareaper.ReaperApplicationConfiguration.JmxCredentials;
+import io.cassandrareaper.core.Cluster;
+import io.cassandrareaper.core.Node;
+import io.cassandrareaper.jmx.ClusterFacade;
+import io.cassandrareaper.jmx.JmxConnectionFactory;
+import io.cassandrareaper.jmx.JmxConnectionsInitializer;
+import io.cassandrareaper.resources.*;
+import io.cassandrareaper.resources.auth.LoginResource;
+import io.cassandrareaper.resources.auth.ShiroExceptionMapper;
+import io.cassandrareaper.resources.auth.ShiroJwtProvider;
+import io.cassandrareaper.service.AutoSchedulingManager;
+import io.cassandrareaper.service.PurgeService;
+import io.cassandrareaper.service.RepairManager;
+import io.cassandrareaper.service.SchedulingManager;
+import io.cassandrareaper.storage.*;
 import io.dropwizard.Application;
 import io.dropwizard.assets.AssetsBundle;
 import io.dropwizard.client.HttpClientBuilder;
@@ -75,6 +53,7 @@ import io.dropwizard.setup.Environment;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.dropwizard.DropwizardExports;
 import io.prometheus.client.exporter.MetricsServlet;
+import jnr.ffi.annotations.In;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.client.HttpClient;
 import org.eclipse.jetty.server.Handler;
@@ -88,15 +67,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import sun.misc.Signal;
 
+import javax.servlet.DispatcherType;
+import javax.servlet.FilterRegistration;
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
 public final class ReaperApplication extends Application<ReaperApplicationConfiguration> {
 
   private static final Logger LOG = LoggerFactory.getLogger(ReaperApplication.class);
   private final AppContext context;
+  private final Initializer initializer;
 
   public ReaperApplication() {
     super();
     LOG.info("default ReaperApplication constructor called");
     this.context = new AppContext();
+    initializer = new Initializer(context);
   }
 
   @VisibleForTesting
@@ -104,6 +93,7 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
     super();
     LOG.info("ReaperApplication constructor called with custom AppContext");
     this.context = context;
+    initializer = new Initializer(context);
   }
 
   public static void main(String[] args) throws Exception {
@@ -169,7 +159,7 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
     int repairThreads = config.getRepairRunThreadCount();
     LOG.info("initializing runner thread pool with {} threads", repairThreads);
 
-    tryInitializeStorage(config, environment);
+  initializer.submit("InitializeStorage", () -> tryInitializeStorage(config, environment));
 
     if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
       return;
@@ -203,12 +193,12 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
     }
 
     context.repairManager = RepairManager.create(
-        context,
-        environment.lifecycle().scheduledExecutorService("RepairRunner").threads(repairThreads).build(),
-        config.getHangingRepairTimeoutMins(),
-        TimeUnit.MINUTES,
-        config.getRepairManagerSchedulingIntervalSeconds(),
-        TimeUnit.SECONDS);
+            context,
+            environment.lifecycle().scheduledExecutorService("RepairRunner").threads(repairThreads).build(),
+            config.getHangingRepairTimeoutMins(),
+            TimeUnit.MINUTES,
+            config.getRepairManagerSchedulingIntervalSeconds(),
+            TimeUnit.SECONDS);
 
     // Enable cross-origin requests for using external GUI applications.
     if (config.isEnableCrossOrigin() || System.getProperty("enableCrossOrigin") != null) {
@@ -263,26 +253,31 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
 
     Thread.sleep(1000);
     context.schedulingManager = SchedulingManager.create(context);
-    context.schedulingManager.start();
+    initializer.submit("StartSchedulingManager", () -> context.schedulingManager.start());
 
     if (config.hasAutoSchedulingEnabled()) {
       LOG.debug("using specified configuration for auto scheduling: {}", config.getAutoScheduling());
       AutoSchedulingManager.start(context);
     }
 
-    initializeJmxSeedsForAllClusters();
-    maybeInitializeSidecarMode(addClusterResource);
+    initializer.submit("InitializeJmxSeeds", this::initializeJmxSeedsForAllClusters);
+    initializer.submit("InitializeSidecarMode", () -> maybeInitializeSidecarMode(addClusterResource));
+
     LOG.info("resuming pending repair runs");
 
-    Preconditions.checkState(
-        context.storage instanceof IDistributedStorage
-            || DatacenterAvailability.SIDECAR != context.config.getDatacenterAvailability(),
-        "Cassandra backend storage is the only one allowing SIDECAR datacenter availability modes.");
+    initializer.submit("CheckStorageForSIDECAR", () -> {
+      Preconditions.checkState(
+              context.storage instanceof IDistributedStorage
+                      || DatacenterAvailability.SIDECAR != context.config.getDatacenterAvailability(),
+              "Cassandra backend storage is the only one allowing SIDECAR datacenter availability modes.");
+    });
 
-    Preconditions.checkState(
-        context.storage instanceof IDistributedStorage
-            || DatacenterAvailability.EACH != context.config.getDatacenterAvailability(),
-        "Cassandra backend storage is the only one allowing EACH datacenter availability modes.");
+    initializer.submit("CheckStorageForEACH", () -> {
+      Preconditions.checkState(
+              context.storage instanceof IDistributedStorage
+                      || DatacenterAvailability.EACH != context.config.getDatacenterAvailability(),
+              "Cassandra backend storage is the only one allowing EACH datacenter availability modes.");
+    });
 
     ScheduledExecutorService scheduler = new InstrumentedScheduledExecutorService(
             environment.lifecycle().scheduledExecutorService("ReaperApplication-scheduler").threads(3).build(),
@@ -292,14 +287,15 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
       // Allowing multiple Reaper instances to work concurrently requires
       // us to poll the database for running repairs regularly
       // only with Cassandra storage
-      scheduleRepairManager(scheduler);
-      scheduleHandleMetricsRequest(scheduler);
+      initializer.submit("ScheduleRepairManager", () -> scheduleRepairManager(scheduler));
+      initializer.submit("ScheduleHandleMetricsRequest", () -> scheduleRepairManager(scheduler));
     } else {
       // Storage is different than Cassandra, assuming we have a single instance
-      context.repairManager.resumeRunningRepairRuns();
+      initializer.submit("ResumeRunningRepairs", context.repairManager::resumeRunningRepairRuns);
     }
 
-    schedulePurge(scheduler);
+    initializer.submit("SchedulePurge", () -> schedulePurge(scheduler));
+
     LOG.info("Initialization complete!");
     LOG.warn("Reaper is ready to get things done!");
   }
@@ -317,7 +313,8 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
           }
           break;
         } catch (RuntimeException e) {
-          LOG.error("Storage is not ready yet, trying again to connect shortly...", e);
+          LOG.info("Storage is not ready yet: {}", e.getMessage());
+//          LOG.error("Storage is not ready yet, trying again to connect shortly...", e);
           storageFailures++;
           if (storageFailures > 60) {
             LOG.error("Too many failures when trying to connect storage. Exiting :'(");
@@ -537,4 +534,21 @@ public final class ReaperApplication extends Application<ReaperApplicationConfig
       LOG.info("Initialized JMX seed list for all clusters.");
     }
   }
+
+//  private Runnable newInitializationTask(String name, InitializationTask task) {
+//    return () -> {
+//      try {
+//        LOG.info("Executing initialization task {}", name);
+//        task.execute();
+//      } catch (ReaperException e) {
+//        LOG.warn("Initialization task " + name + " failed", e);
+//      } catch (InterruptedException e) {
+//        LOG.debug("Initialization task " + name + " was interrupted", e);
+//      }
+//    };
+//  }
+
+//  private static interface InitializationTask {
+//    void execute() throws ReaperException, InterruptedException;
+//  }
 }

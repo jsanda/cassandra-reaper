@@ -319,6 +319,7 @@ public final class CassandraStorage implements IStorage, IDistributedStorage {
   }
 
   private void prepareStatements() {
+    final long start = System.currentTimeMillis();
     final String timeUdf = 0 < VersionNumber.parse("2.2").compareTo(version) ? "dateOf" : "toTimestamp";
     insertClusterPrepStmt = session
             .prepare(
@@ -457,6 +458,9 @@ public final class CassandraStorage implements IStorage, IDistributedStorage {
     }
     prepareMetricStatements();
     prepareOperationsStatements();
+    long finish = System.currentTimeMillis();
+
+    LOG.info("prepared statements in " + (finish - start) + " ms");
   }
 
   private void prepareLeaderElectionStatements(final String timeUdf) {

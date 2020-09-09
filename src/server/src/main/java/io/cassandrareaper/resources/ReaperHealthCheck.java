@@ -40,22 +40,30 @@ public final class ReaperHealthCheck extends com.codahale.metrics.health.HealthC
 
   @Override
   protected Result check() throws ReaperException {
-    if (context.storage.isStorageConnected()) {
-      if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
-        return Result.healthy();
-      }
-      if (System.currentTimeMillis() > nextCheck) {
-        nextCheck = System.currentTimeMillis() + HEALTH_CHECK_INTERVAL;
-        try {
-          context.storage.getClusters();
-          context.storage.getAllRepairSchedules();
-          lastResult = Result.healthy();
-        } catch (RuntimeException ex) {
-          lastResult = Result.unhealthy(ex);
-        }
-      }
-      return lastResult;
+//    if (context.storage.isStorageConnected()) {
+    if (context.isRunning.get()) {
+      return Result.healthy();
+    } else {
+      return Result.unhealthy("storage not connected");
     }
-    return Result.unhealthy("storage not connected");
+
+//    if (context.storage.isStorageConnected()) {
+////      if (Boolean.parseBoolean(System.getenv("SCHEMA_ONLY"))) {
+//        return Result.healthy();
+////      }
+//      if (System.currentTimeMillis() > nextCheck) {
+//        nextCheck = System.currentTimeMillis() + HEALTH_CHECK_INTERVAL;
+//        try {
+//          context.storage.getClusters();
+//          context.storage.getAllRepairSchedules();
+//          lastResult = Result.healthy();
+//        } catch (RuntimeException ex) {
+//          lastResult = Result.unhealthy(ex);
+//        }
+//      }
+//      return lastResult;
+//    }
+//    return Result.unhealthy("storage not connected");
   }
 }
+

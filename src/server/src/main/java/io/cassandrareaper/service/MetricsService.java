@@ -74,7 +74,15 @@ public final class MetricsService {
             .withHostname(context.config.getEnforcedLocalNode().orElse("127.0.0.1"))
             .build();
 
-      localClusterName = Cluster.toSymbolicName(clusterFacade.getClusterName(host));
+      // When running in sidecar mode in Kubernetes, the controller that deploys Reaper can
+      // simply inject the local cluster name. This simplifies startup as Reaper otherwise
+      // needs to access Cassandra over JMX to get the cluster name.
+      String clusterName = System.getenv("REAPER_LOCAL_CASS_CLUSTER");
+      if (clusterName == null) {
+        localClusterName = Cluster.toSymbolicName(clusterFacade.getClusterName(host));
+      } else {
+        localClusterName = clusterName;
+      }
     } else {
       localClusterName = null;
     }
